@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HAUNTED — Monitor</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#030303;font-family:'IBM Plex Mono',monospace;overflow:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 3px,rgba(0,0,0,.05) 3px,rgba(0,0,0,.05) 4px);pointer-events:none;z-index:10}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.75));pointer-events:none;z-index:11}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+.ui{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;justify-content:space-between;padding:32px 48px;pointer-events:none}
+.title{font-size:10px;letter-spacing:.35em;color:#181818;text-transform:uppercase}
+.bottom{display:flex;justify-content:space-between;align-items:flex-end}
+.msg{font-size:10px;letter-spacing:.1em;color:transparent;transition:color 2s;font-weight:300;font-style:italic;line-height:1.8}
+.msg.on{color:#252525}
+.slots{display:flex;gap:10px;align-items:center}
+.slot{width:5px;height:5px;border-radius:50%;background:#0f0f0f;transition:background .4s}
+.slot.on{background:#1e1e1e}
+.slot.dead{background:rgba(255,20,20,.25)}
+#resetBtn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:30;pointer-events:all;transition:color .2s,border-color .2s;text-transform:uppercase}
+#resetBtn:hover{color:#333;border-color:#333}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="ui">
+  <div class="title">Haunted</div>
+  <div class="bottom">
+    <div class="msg" id="msg"></div>
+    <div class="slots" id="slots"></div>
+  </div>
+</div>
+<button id="resetBtn">Reset</button>
+
+<script>
+const socket=io();
+socket.emit('register:screen');
+
+const MSGS=['are you still here?','I know what you took.','tooth. under. pillow.','she never forgave you.','let go. let go. let go.'];
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H,mi=0,presence=0,phase='waiting';
+const E={x:0,tr:[],nb:0,bpm:0};
+const slotsEl=document.getElementById('slots');
+for(let i=0;i<5;i++){const d=document.createElement('div');d.className='slot';d.id='sl'+i;slotsEl.appendChild(d);}
+
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;E.nb=W*.06;}
+resize();
+window.addEventListener('resize',()=>{resize();E.tr=[];});
+
+function sy(t,a){
+  if(t<.08)return 0;if(t<.18)return a*.07;if(t<.24)return-a*.09;
+  if(t<.30)return a;if(t<.40)return-a*.52;if(t<.50)return a*.1;return 0;
+}
+
+function draw(){
+  const bpmT=presence>2?(26+Math.round((presence/100)*74)):0;
+  E.bpm+=(bpmT-E.bpm)*.04;
+  const adv=18*(.5+E.bpm/100*.5);
+  E.x+=adv;
+  if(E.x>W){E.x=0;E.tr=[];E.nb=W*.04;}
+  const my=H*.5;let y=my;
+  if(E.bpm>4){
+    const bp=60000/E.bpm,sw=bp*.44,loc=E.x-E.nb;
+    const amp=H*.04+(presence/100)*H*.22;
+    if(loc>=0&&loc<sw)y=my-sy(loc/sw,amp);
+    if(loc>=sw-1)E.nb=E.x+bp*.56;
+  }
+  E.tr.push({x:E.x,y});
+  if(E.tr.length>W*1.5)E.tr.shift();
+  ctx.clearRect(0,0,W,H);
+  const dead=phase==='flatlined';
+  for(let i=1;i<E.tr.length;i++){
+    const age=(E.tr.length-i)/E.tr.length;
+    const al=.02+(1-age)*(presence/100)*.65;
+    ctx.beginPath();ctx.moveTo(E.tr[i-1].x,E.tr[i-1].y);ctx.lineTo(E.tr[i].x,E.tr[i].y);
+    ctx.strokeStyle=dead?`rgba(80,4,4,${al})`:`rgba(145,210,145,${al})`;
+    ctx.lineWidth=1;ctx.stroke();
+  }
+  if(E.bpm>4&&!dead){
+    const last=E.tr[E.tr.length-1];
+    if(last){ctx.beginPath();ctx.arc(last.x,last.y,1.4,0,Math.PI*2);ctx.fillStyle=`rgba(145,210,145,${.15+presence/100*.45})`;ctx.fill();}
+  }
+  requestAnimationFrame(draw);
+}
+draw();
+
+socket.on('state',state=>{
+  phase=state.phase;
+  presence=state.holdingCount/5*100;
+  state.participants.forEach((p,i)=>{
+    const s=document.getElementById('sl'+i);
+    if(!s)return;
+    s.className='slot'+(state.phase==='flatlined'?' dead':p.holding?' on':'');
+  });
+  for(let i=state.participants.length;i<5;i++){const s=document.getElementById('sl'+i);if(s)s.className='slot';}
+  if(state.phase==='active'&&state.holdingCount>=4&&Math.random()<.01){showMsg();}
+});
+
+socket.on('flatline',({name})=>{
+  presence=0;
+  const m=document.getElementById('msg');
+  m.classList.remove('on');
+  setTimeout(()=>{m.textContent=name.toLowerCase()+' let go.';m.classList.add('on');},200);
+});
+
+socket.on('reset',()=>location.reload());
+document.getElementById('resetBtn').addEventListener('click',()=>socket.emit('admin:reset'));
+
+let msgTimer=setInterval(showMsg,5000);
+function showMsg(){
+  if(presence<50)return;
+  mi=(mi+1)%MSGS.length;
+  const m=document.getElementById('msg');
+  m.classList.remove('on');
+  setTimeout(()=>{m.textContent=MSGS[mi];m.classList.add('on');},200);
+}
+</script>
+</body>
+</html>

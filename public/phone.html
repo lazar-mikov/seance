@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>HAUNTED</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#030303;font-family:'IBM Plex Mono',monospace;overflow:hidden;-webkit-user-select:none;user-select:none}
+.wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:52px 24px 60px}
+.name{font-size:8px;letter-spacing:.35em;color:#1c1c1c;text-transform:uppercase;min-height:12px}
+.mid{display:flex;flex-direction:column;align-items:center;gap:40px;flex:1;justify-content:center}
+canvas{width:180px;height:40px;display:block}
+.cw{position:relative;display:flex;align-items:center;justify-content:center;width:130px;height:130px}
+@keyframes rp{0%,100%{opacity:.03}50%{opacity:.18}}
+.ring{position:absolute;border-radius:50%;border:.5px solid transparent;pointer-events:none}
+.ring.r1{width:130px;height:130px}
+.ring.r2{width:162px;height:162px}
+.cw.active .ring{border-color:#1e1e1e}
+.cw.active .ring.r1{animation:rp 1.8s ease-in-out infinite}
+.cw.active .ring.r2{animation:rp 1.8s ease-in-out infinite .6s}
+.circ{width:80px;height:80px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;transition:background .1s,border-color .1s;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;position:relative;z-index:2}
+.circ.held{background:#888;border-color:#888}
+.circ.dead{border-color:rgba(255,20,20,.15);cursor:default}
+.circ.disabled{opacity:.3;cursor:default}
+.dots{display:flex;gap:5px;justify-content:center}
+.dot{width:4px;height:4px;border-radius:50%;background:#0f0f0f;transition:background .3s}
+.dot.on{background:#222}
+.dot.dead{background:rgba(255,20,20,.3)}
+
+#join-screen{position:fixed;inset:0;background:#030303;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:32px;padding:40px;transition:opacity .5s}
+#join-screen.hidden{opacity:0;pointer-events:none}
+.join-title{font-size:9px;letter-spacing:.4em;color:#181818;text-transform:uppercase}
+.join-input{width:100%;max-width:240px;background:transparent;border:none;border-bottom:.5px solid #222;color:#444;font-family:'IBM Plex Mono',monospace;font-size:18px;padding:10px 0;outline:none;text-align:center;letter-spacing:.1em}
+.join-input::placeholder{color:#1a1a1a;font-size:13px}
+.join-btn{width:100%;max-width:240px;padding:13px;background:transparent;border:.5px solid #1e1e1e;color:#2a2a2a;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.3em;text-transform:uppercase;cursor:pointer;transition:border-color .2s,color .2s}
+.join-btn:hover{border-color:#333;color:#444}
+.join-err{font-size:9px;color:rgba(255,20,20,.4);letter-spacing:.1em;min-height:14px;text-align:center}
+</style>
+</head>
+<body>
+
+<div id="join-screen">
+  <div class="join-title">Haunted</div>
+  <input class="join-input" id="nameInput" type="text" placeholder="your name" maxlength="20" autocomplete="off">
+  <button class="join-btn" id="joinBtn">Enter the circle</button>
+  <div class="join-err" id="joinErr"></div>
+</div>
+
+<div class="wrap">
+  <div class="name" id="nameLabel"></div>
+  <div class="mid">
+    <canvas id="ekgCanvas" height="80"></canvas>
+    <div class="cw" id="cw">
+      <div class="ring r2"></div>
+      <div class="ring r1"></div>
+      <div class="circ disabled" id="circ"></div>
+    </div>
+  </div>
+  <div class="dots" id="dots"></div>
+</div>
+
+<script>
+const socket=io();
+let registered=false,held=false,isDead=false,presence=0;
+const circ=document.getElementById('circ');
+const cw=document.getElementById('cw');
+const dotsEl=document.getElementById('dots');
+const nameLabel=document.getElementById('nameLabel');
+
+for(let i=0;i<5;i++){const d=document.createElement('div');d.className='dot';d.id='dot'+i;dotsEl.appendChild(d);}
+
+document.getElementById('joinBtn').addEventListener('click',join);
+document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')join();});
+
+function join(){
+  const name=document.getElementById('nameInput').value.trim();
+  if(!name){document.getElementById('joinErr').textContent='Enter your name.';return;}
+  socket.emit('register:phone',{name});
+}
+
+socket.on('registered',({slot,name})=>{
+  document.getElementById('join-screen').classList.add('hidden');
+  nameLabel.textContent=name.toUpperCase();
+  circ.className='circ';
+  registered=true;
+});
+
+socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
+
+function press(){
+  if(!registered||isDead||circ.classList.contains('disabled'))return;
+  held=true;
+  circ.className='circ held';
+  cw.classList.add('active');
+  socket.emit('hold');
+}
+function release(){
+  if(!registered||isDead)return;
+  if(!held)return;
+  held=false;
+  circ.className='circ';
+  cw.classList.remove('active');
+  socket.emit('release');
+}
+
+circ.addEventListener('mousedown',e=>{e.preventDefault();press()});
+circ.addEventListener('mouseup',release);
+circ.addEventListener('mouseleave',()=>{if(held)release()});
+circ.addEventListener('touchstart',e=>{e.preventDefault();press()},{passive:false});
+circ.addEventListener('touchend',e=>{e.preventDefault();release()},{passive:false});
+circ.addEventListener('touchcancel',()=>{if(held)release()});
+
+socket.on('state',state=>{
+  presence=state.holdingCount/5*100;
+  state.participants.forEach((p,i)=>{
+    const d=document.getElementById('dot'+i);
+    if(!d)return;
+    if(state.phase==='flatlined')d.className='dot dead';
+    else d.className='dot'+(p.holding?' on':'');
+  });
+  for(let i=state.participants.length;i<5;i++){const d=document.getElementById('dot'+i);if(d)d.className='dot';}
+});
+
+socket.on('flatline',({name})=>{
+  isDead=true;held=false;
+  circ.className='circ dead';
+  cw.classList.remove('active');
+});
+
+socket.on('reset',()=>location.reload());
+
+const canvas=document.getElementById('ekgCanvas');
+const ctx=canvas.getContext('2d');
+let W=180,H=40;
+const E={x:0,tr:[],nb:0,bpm:0};
+(function resize(){
+  const r=window.devicePixelRatio||1;
+  canvas.width=W*r;canvas.height=H*r;
+  ctx.setTransform(r,0,0,r,0,0);
+  E.nb=W*.1;
+})();
+
+function sy(t,a){
+  if(t<.08)return 0;if(t<.18)return a*.07;if(t<.24)return-a*.09;
+  if(t<.30)return a;if(t<.40)return-a*.52;if(t<.50)return a*.1;return 0;
+}
+function drawEkg(){
+  presence+=(( held?100:0)-presence)*.06;
+  const bpmT=presence>2?(26+Math.round((presence/100)*74)):0;
+  E.bpm+=(bpmT-E.bpm)*.05;
+  const adv=8*(.5+E.bpm/100*.5);
+  E.x+=adv;
+  if(E.x>W){E.x=0;E.tr=[];E.nb=W*.08;}
+  const my=H*.45;let y=my;
+  if(E.bpm>4){
+    const bp=60000/E.bpm,sw=bp*.44*.013,loc=E.x-E.nb;
+    const amp=H*.06+(presence/100)*H*.36;
+    if(loc>=0&&loc<sw)y=my-sy(loc/sw,amp);
+    if(loc>=sw-1)E.nb=E.x+bp*.56*.013;
+  }
+  E.tr.push({x:E.x,y});
+  if(E.tr.length>W*2)E.tr.shift();
+  ctx.clearRect(0,0,W,H);
+  for(let i=1;i<E.tr.length;i++){
+    const age=(E.tr.length-i)/E.tr.length;
+    const al=.02+(1-age)*(presence/100)*.7;
+    ctx.beginPath();ctx.moveTo(E.tr[i-1].x,E.tr[i-1].y);ctx.lineTo(E.tr[i].x,E.tr[i].y);
+    ctx.strokeStyle=isDead?`rgba(60,4,4,${al*.5})`:`rgba(140,200,140,${al})`;
+    ctx.lineWidth=.8;ctx.stroke();
+  }
+  requestAnimationFrame(drawEkg);
+}
+drawEkg();
+</script>
+</body>
+</html>
