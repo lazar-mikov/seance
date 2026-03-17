@@ -23,12 +23,12 @@ canvas{width:180px;height:40px;display:block}
 .cw.active .ring.r2{animation:rp 1.8s ease-in-out infinite .6s}
 .circ{width:80px;height:80px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;transition:background .1s,border-color .1s;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;position:relative;z-index:2}
 .circ.held{background:#888;border-color:#888}
-.circ.dead{border-color:rgba(255,20,20,.15);cursor:default}
 .circ.disabled{opacity:.3;cursor:default}
 .dots{display:flex;gap:5px;justify-content:center}
-.dot{width:4px;height:4px;border-radius:50%;background:#0f0f0f;transition:background .3s}
-.dot.on{background:#222}
-.dot.dead{background:rgba(255,20,20,.3)}
+.dot{width:4px;height:4px;border-radius:50%;background:#0f0f0f;transition:background .3s,transform .4s;transform:scale(0)}
+.dot.joined{background:#181818;transform:scale(1)}
+.dot.on{background:#2a2a2a;transform:scale(1)}
+.dot.dead{background:rgba(255,20,20,.3);transform:scale(1)}
 
 #join-screen{position:fixed;inset:0;background:#030303;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:32px;padding:40px;transition:opacity .5s}
 #join-screen.hidden{opacity:0;pointer-events:none}
@@ -64,11 +64,10 @@ canvas{width:180px;height:40px;display:block}
 
 <script>
 const socket=io();
-let registered=false,held=false,isDead=false,presence=0;
+let registered=false,held=false,presence=0,flatlined=false;
 const circ=document.getElementById('circ');
 const cw=document.getElementById('cw');
 const dotsEl=document.getElementById('dots');
-const nameLabel=document.getElementById('nameLabel');
 
 for(let i=0;i<5;i++){const d=document.createElement('div');d.className='dot';d.id='dot'+i;dotsEl.appendChild(d);}
 
@@ -83,7 +82,7 @@ function join(){
 
 socket.on('registered',({slot,name})=>{
   document.getElementById('join-screen').classList.add('hidden');
-  nameLabel.textContent=name.toUpperCase();
+  document.getElementById('nameLabel').textContent=name.toUpperCase();
   circ.className='circ';
   registered=true;
 });
@@ -91,15 +90,14 @@ socket.on('registered',({slot,name})=>{
 socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
 
 function press(){
-  if(!registered||isDead||circ.classList.contains('disabled'))return;
+  if(!registered||circ.classList.contains('disabled'))return;
   held=true;
   circ.className='circ held';
   cw.classList.add('active');
   socket.emit('hold');
 }
 function release(){
-  if(!registered||isDead)return;
-  if(!held)return;
+  if(!registered||!held)return;
   held=false;
   circ.className='circ';
   cw.classList.remove('active');
@@ -114,19 +112,22 @@ circ.addEventListener('touchend',e=>{e.preventDefault();release()},{passive:fals
 circ.addEventListener('touchcancel',()=>{if(held)release()});
 
 socket.on('state',state=>{
-  presence=state.holdingCount/5*100;
+  flatlined=state.phase==='flatlined';
   state.participants.forEach((p,i)=>{
     const d=document.getElementById('dot'+i);
     if(!d)return;
-    if(state.phase==='flatlined')d.className='dot dead';
-    else d.className='dot'+(p.holding?' on':'');
+    if(flatlined) d.className='dot dead';
+    else if(p.holding) d.className='dot on';
+    else d.className='dot joined';
   });
-  for(let i=state.participants.length;i<5;i++){const d=document.getElementById('dot'+i);if(d)d.className='dot';}
+  for(let i=state.participants.length;i<5;i++){
+    const d=document.getElementById('dot'+i);if(d)d.className='dot';
+  }
 });
 
-socket.on('flatline',({name})=>{
-  isDead=true;held=false;
-  circ.className='circ dead';
+socket.on('flatline',()=>{
+  held=false;
+  circ.className='circ';
   cw.classList.remove('active');
 });
 
@@ -148,7 +149,7 @@ function sy(t,a){
   if(t<.30)return a;if(t<.40)return-a*.52;if(t<.50)return a*.1;return 0;
 }
 function drawEkg(){
-  presence+=(( held?100:0)-presence)*.06;
+  presence+=((held?100:0)-presence)*.06;
   const bpmT=presence>2?(26+Math.round((presence/100)*74)):0;
   E.bpm+=(bpmT-E.bpm)*.05;
   const adv=8*(.5+E.bpm/100*.5);
@@ -168,7 +169,7 @@ function drawEkg(){
     const age=(E.tr.length-i)/E.tr.length;
     const al=.02+(1-age)*(presence/100)*.7;
     ctx.beginPath();ctx.moveTo(E.tr[i-1].x,E.tr[i-1].y);ctx.lineTo(E.tr[i].x,E.tr[i].y);
-    ctx.strokeStyle=isDead?`rgba(60,4,4,${al*.5})`:`rgba(140,200,140,${al})`;
+    ctx.strokeStyle=`rgba(140,200,140,${al})`;
     ctx.lineWidth=.8;ctx.stroke();
   }
   requestAnimationFrame(drawEkg);

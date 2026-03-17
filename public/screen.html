@@ -18,9 +18,10 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
 .msg{font-size:10px;letter-spacing:.1em;color:transparent;transition:color 2s;font-weight:300;font-style:italic;line-height:1.8}
 .msg.on{color:#252525}
 .slots{display:flex;gap:10px;align-items:center}
-.slot{width:5px;height:5px;border-radius:50%;background:#0f0f0f;transition:background .4s}
-.slot.on{background:#1e1e1e}
-.slot.dead{background:rgba(255,20,20,.25)}
+.slot{width:6px;height:6px;border-radius:50%;background:transparent;transition:background .5s,transform .4s;transform:scale(0)}
+.slot.joined{background:#1c1c1c;transform:scale(1)}
+.slot.on{background:#2e2e2e;transform:scale(1)}
+.slot.dead{background:rgba(255,20,20,.3);transform:scale(1)}
 #resetBtn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:30;pointer-events:all;transition:color .2s,border-color .2s;text-transform:uppercase}
 #resetBtn:hover{color:#333;border-color:#333}
 </style>
@@ -48,6 +49,46 @@ const E={x:0,tr:[],nb:0,bpm:0};
 const slotsEl=document.getElementById('slots');
 for(let i=0;i<5;i++){const d=document.createElement('div');d.className='slot';d.id='sl'+i;slotsEl.appendChild(d);}
 
+// --- AUDIO ---
+let audioCtx=null;
+let lastBeatTime=0;
+
+function initAudio(){
+  if(audioCtx)return;
+  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+}
+
+function playBeat(volume){
+  if(!audioCtx||volume<0.02)return;
+  const now=audioCtx.currentTime;
+
+  // First thump (lub)
+  const o1=audioCtx.createOscillator();
+  const g1=audioCtx.createGain();
+  o1.connect(g1);g1.connect(audioCtx.destination);
+  o1.frequency.setValueAtTime(80,now);
+  o1.frequency.exponentialRampToValueAtTime(40,now+0.08);
+  g1.gain.setValueAtTime(0,now);
+  g1.gain.linearRampToValueAtTime(volume*0.6,now+0.005);
+  g1.gain.exponentialRampToValueAtTime(0.001,now+0.1);
+  o1.start(now);o1.stop(now+0.1);
+
+  // Second thump (dub) — slightly after
+  const o2=audioCtx.createOscillator();
+  const g2=audioCtx.createGain();
+  o2.connect(g2);g2.connect(audioCtx.destination);
+  o2.frequency.setValueAtTime(60,now+0.1);
+  o2.frequency.exponentialRampToValueAtTime(30,now+0.18);
+  g2.gain.setValueAtTime(0,now+0.1);
+  g2.gain.linearRampToValueAtTime(volume*0.35,now+0.105);
+  g2.gain.exponentialRampToValueAtTime(0.001,now+0.2);
+  o2.start(now+0.1);o2.stop(now+0.2);
+}
+
+// Initialise audio on first interaction
+document.addEventListener('click',initAudio,{once:true});
+document.addEventListener('keydown',initAudio,{once:true});
+
 function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;E.nb=W*.06;}
 resize();
 window.addEventListener('resize',()=>{resize();E.tr=[];});
@@ -68,7 +109,16 @@ function draw(){
     const bp=60000/E.bpm,sw=bp*.44,loc=E.x-E.nb;
     const amp=H*.04+(presence/100)*H*.22;
     if(loc>=0&&loc<sw)y=my-sy(loc/sw,amp);
-    if(loc>=sw-1)E.nb=E.x+bp*.56;
+
+    // Fire heartbeat sound at the R-peak of each beat
+    if(loc>=sw-1){
+      E.nb=E.x+bp*.56;
+      const now=performance.now();
+      if(now-lastBeatTime>200){
+        lastBeatTime=now;
+        playBeat(presence/100);
+      }
+    }
   }
   E.tr.push({x:E.x,y});
   if(E.tr.length>W*1.5)E.tr.shift();
@@ -95,23 +145,28 @@ socket.on('state',state=>{
   state.participants.forEach((p,i)=>{
     const s=document.getElementById('sl'+i);
     if(!s)return;
-    s.className='slot'+(state.phase==='flatlined'?' dead':p.holding?' on':'');
+    if(state.phase==='flatlined') s.className='slot dead';
+    else if(p.holding) s.className='slot on';
+    else s.className='slot joined';
   });
   for(let i=state.participants.length;i<5;i++){const s=document.getElementById('sl'+i);if(s)s.className='slot';}
   if(state.phase==='active'&&state.holdingCount>=4&&Math.random()<.01){showMsg();}
 });
 
-socket.on('flatline',({name})=>{
+socket.on('flatline',()=>{
   presence=0;
   const m=document.getElementById('msg');
   m.classList.remove('on');
-  setTimeout(()=>{m.textContent=name.toLowerCase()+' let go.';m.classList.add('on');},200);
+  setTimeout(()=>{m.textContent='the channel is closed.';m.classList.add('on');},200);
 });
 
 socket.on('reset',()=>location.reload());
-document.getElementById('resetBtn').addEventListener('click',()=>socket.emit('admin:reset'));
+document.getElementById('resetBtn').addEventListener('click',()=>{
+  initAudio();
+  socket.emit('admin:reset');
+});
 
-let msgTimer=setInterval(showMsg,5000);
+setInterval(showMsg,5000);
 function showMsg(){
   if(presence<50)return;
   mi=(mi+1)%MSGS.length;
