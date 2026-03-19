@@ -14,15 +14,15 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 canvas{position:fixed;inset:0;width:100%;height:100%}
 .ui{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;justify-content:space-between;padding:32px 48px;pointer-events:none}
 .title{font-size:10px;letter-spacing:.35em;color:#181818;text-transform:uppercase}
-.bottom{display:flex;justify-content:space-between;align-items:flex-end}
-.msg{font-size:10px;letter-spacing:.1em;color:transparent;transition:color 2s;font-weight:300;font-style:italic;line-height:1.8}
+.bottom{display:flex;flex-direction:column;align-items:center;gap:16px}
+.msg{font-size:10px;letter-spacing:.1em;color:transparent;transition:color 2s;font-weight:300;font-style:italic;line-height:1.8;text-align:center}
 .msg.on{color:#252525}
-.slots{display:flex;gap:10px;align-items:center}
-.slot{width:6px;height:6px;border-radius:50%;background:transparent;transition:background .5s,transform .4s;transform:scale(0)}
+.slots{display:flex;gap:18px;align-items:center;justify-content:center}
+.slot{width:10px;height:10px;border-radius:50%;background:transparent;transition:background .5s,transform .4s;transform:scale(0)}
 .slot.joined{background:#1c1c1c;transform:scale(1)}
 .slot.on{background:#2e2e2e;transform:scale(1)}
 .slot.dead{background:rgba(255,20,20,.3);transform:scale(1)}
-#resetBtn{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:30;pointer-events:all;transition:color .2s,border-color .2s;text-transform:uppercase}
+#resetBtn{position:fixed;bottom:20px;right:32px;font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:30;pointer-events:all;transition:color .2s,border-color .2s;text-transform:uppercase}
 #resetBtn:hover{color:#333;border-color:#333}
 </style>
 </head>
@@ -36,7 +36,6 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
   </div>
 </div>
 <button id="resetBtn">Reset</button>
-
 <script>
 const socket=io();
 socket.emit('register:screen');
@@ -44,131 +43,122 @@ socket.emit('register:screen');
 const MSGS=['are you still here?','I know what you took.','tooth. under. pillow.','she never forgave you.','let go. let go. let go.'];
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
-let W,H,mi=0,presence=0,phase='waiting';
-const E={x:0,tr:[],nb:0,bpm:0};
+let W,H,mi=0,phase='waiting';
+const ME={x:0,tr:[],nb:0,bpm:0,pres:0};
 const slotsEl=document.getElementById('slots');
 for(let i=0;i<5;i++){const d=document.createElement('div');d.className='slot';d.id='sl'+i;slotsEl.appendChild(d);}
 
-// --- AUDIO ---
-let audioCtx=null;
-let lastBeatTime=0;
-
-function initAudio(){
-  if(audioCtx)return;
-  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
-}
-
-function playBeat(volume){
-  if(!audioCtx||volume<0.02)return;
+let audioCtx=null,lastBeatTime=0;
+function initAudio(){if(audioCtx)return;audioCtx=new(window.AudioContext||window.webkitAudioContext)();}
+function playBeat(vol){
+  if(!audioCtx||vol<0.02)return;
   const now=audioCtx.currentTime;
-
-  // First thump (lub)
-  const o1=audioCtx.createOscillator();
-  const g1=audioCtx.createGain();
+  const o1=audioCtx.createOscillator(),g1=audioCtx.createGain();
   o1.connect(g1);g1.connect(audioCtx.destination);
-  o1.frequency.setValueAtTime(80,now);
-  o1.frequency.exponentialRampToValueAtTime(40,now+0.08);
-  g1.gain.setValueAtTime(0,now);
-  g1.gain.linearRampToValueAtTime(volume*0.6,now+0.005);
-  g1.gain.exponentialRampToValueAtTime(0.001,now+0.1);
+  o1.frequency.setValueAtTime(80,now);o1.frequency.exponentialRampToValueAtTime(40,now+0.08);
+  g1.gain.setValueAtTime(0,now);g1.gain.linearRampToValueAtTime(vol*0.6,now+0.005);g1.gain.exponentialRampToValueAtTime(0.001,now+0.1);
   o1.start(now);o1.stop(now+0.1);
-
-  // Second thump (dub) — slightly after
-  const o2=audioCtx.createOscillator();
-  const g2=audioCtx.createGain();
+  const o2=audioCtx.createOscillator(),g2=audioCtx.createGain();
   o2.connect(g2);g2.connect(audioCtx.destination);
-  o2.frequency.setValueAtTime(60,now+0.1);
-  o2.frequency.exponentialRampToValueAtTime(30,now+0.18);
-  g2.gain.setValueAtTime(0,now+0.1);
-  g2.gain.linearRampToValueAtTime(volume*0.35,now+0.105);
-  g2.gain.exponentialRampToValueAtTime(0.001,now+0.2);
+  o2.frequency.setValueAtTime(60,now+0.1);o2.frequency.exponentialRampToValueAtTime(30,now+0.18);
+  g2.gain.setValueAtTime(0,now+0.1);g2.gain.linearRampToValueAtTime(vol*0.35,now+0.105);g2.gain.exponentialRampToValueAtTime(0.001,now+0.2);
   o2.start(now+0.1);o2.stop(now+0.2);
 }
-
-// Initialise audio on first interaction
 document.addEventListener('click',initAudio,{once:true});
 document.addEventListener('keydown',initAudio,{once:true});
 
-function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;E.nb=W*.06;}
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;ME.nb=0;ME.tr=[];}
 resize();
-window.addEventListener('resize',()=>{resize();E.tr=[];});
+window.addEventListener('resize',resize);
 
-function sy(t,a){
-  if(t<.08)return 0;if(t<.18)return a*.07;if(t<.24)return-a*.09;
-  if(t<.30)return a;if(t<.40)return-a*.52;if(t<.50)return a*.1;return 0;
+function ecg(t){
+  let y=0;
+  if(t>0.06&&t<0.14) y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
+  if(t>0.22&&t<0.27) y-=0.22*Math.sin((t-0.22)/0.05*Math.PI);
+  if(t>0.27&&t<0.37) y+=1.00*Math.sin((t-0.27)/0.10*Math.PI);
+  if(t>0.37&&t<0.42) y-=0.12*Math.sin((t-0.37)/0.05*Math.PI);
+  if(t>0.42&&t<0.50) y+=0.60*Math.sin((t-0.42)/0.08*Math.PI);
+  if(t>0.50&&t<0.56) y-=0.25*Math.sin((t-0.50)/0.06*Math.PI);
+  if(t>0.60&&t<0.80) y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
+  return y;
 }
 
-function draw(){
-  const bpmT=presence>2?(26+Math.round((presence/100)*74)):0;
-  E.bpm+=(bpmT-E.bpm)*.04;
-  const adv=18*(.5+E.bpm/100*.5);
-  E.x+=adv;
-  if(E.x>W){E.x=0;E.tr=[];E.nb=W*.04;}
-  const my=H*.5;let y=my;
-  if(E.bpm>4){
-    const bp=60000/E.bpm,sw=bp*.44,loc=E.x-E.nb;
-    const amp=H*.04+(presence/100)*H*.22;
-    if(loc>=0&&loc<sw)y=my-sy(loc/sw,amp);
+// Each person adds a noticeable step; first person is very faint/small
+function presToAmp(pres,maxAmp){
+  const n=pres/100*5;
+  const norm=Math.pow(n/5,0.65);
+  return maxAmp*(0.04+norm*0.96);
+}
+function presToBright(pres){
+  const n=pres/100*5;
+  return 0.12+Math.pow(n/5,0.6)*0.72;
+}
 
-    // Fire heartbeat sound at the R-peak of each beat
-    if(loc>=sw-1){
-      E.nb=E.x+bp*.56;
+let lastT=0;
+function draw(ts){
+  const dt=Math.min(ts-lastT,50);lastT=ts;
+  const dead=phase==='flatlined';
+  const spd=70*(dt/1000);
+  ME.x+=spd;
+  if(ME.x>W){ME.x=0;ME.tr=[];ME.nb=0;}
+  const bpmT=ME.pres>2?(42+ME.pres/100*28):0;
+  ME.bpm+=(bpmT-ME.bpm)*.04;
+  const my=H*.5;let y=my;
+  if(ME.bpm>4&&!dead){
+    const bp=60000/ME.bpm;
+    const beatPx=70*(bp/1000);
+    const loc=ME.x-ME.nb;
+    const amp=presToAmp(ME.pres,H*.30);
+    if(loc>=0&&loc<beatPx) y=my-ecg(loc/beatPx)*amp;
+    if(loc>=beatPx){
+      ME.nb=ME.x;
       const now=performance.now();
-      if(now-lastBeatTime>200){
-        lastBeatTime=now;
-        playBeat(presence/100);
-      }
+      if(now-lastBeatTime>200){lastBeatTime=now;playBeat(ME.pres/100);}
     }
   }
-  E.tr.push({x:E.x,y});
-  if(E.tr.length>W*1.5)E.tr.shift();
+  ME.tr.push({x:ME.x,y});
+  if(ME.tr.length>W*3)ME.tr.shift();
   ctx.clearRect(0,0,W,H);
-  const dead=phase==='flatlined';
-  for(let i=1;i<E.tr.length;i++){
-    const age=(E.tr.length-i)/E.tr.length;
-    const al=.02+(1-age)*(presence/100)*.65;
-    ctx.beginPath();ctx.moveTo(E.tr[i-1].x,E.tr[i-1].y);ctx.lineTo(E.tr[i].x,E.tr[i].y);
-    ctx.strokeStyle=dead?`rgba(80,4,4,${al})`:`rgba(145,210,145,${al})`;
-    ctx.lineWidth=1;ctx.stroke();
+  const bright=dead?0.08:presToBright(ME.pres);
+  for(let i=1;i<ME.tr.length;i++){
+    const age=(ME.tr.length-i)/ME.tr.length;
+    const al=0.02+(1-age)*bright;
+    ctx.beginPath();ctx.moveTo(ME.tr[i-1].x,ME.tr[i-1].y);ctx.lineTo(ME.tr[i].x,ME.tr[i].y);
+    ctx.strokeStyle=dead?`rgba(80,4,4,${al})`:`rgba(155,225,155,${al})`;
+    ctx.lineWidth=1.8;ctx.lineJoin='round';ctx.stroke();
   }
-  if(E.bpm>4&&!dead){
-    const last=E.tr[E.tr.length-1];
-    if(last){ctx.beginPath();ctx.arc(last.x,last.y,1.4,0,Math.PI*2);ctx.fillStyle=`rgba(145,210,145,${.15+presence/100*.45})`;ctx.fill();}
-  }
+  ctx.fillStyle='#030303';
+  ctx.fillRect(ME.x+1,0,W*.07,H);
   requestAnimationFrame(draw);
 }
-draw();
+requestAnimationFrame(draw);
 
 socket.on('state',state=>{
   phase=state.phase;
-  presence=state.holdingCount/5*100;
+  ME.pres=state.holdingCount/5*100;
   state.participants.forEach((p,i)=>{
-    const s=document.getElementById('sl'+i);
-    if(!s)return;
+    const s=document.getElementById('sl'+i);if(!s)return;
     if(state.phase==='flatlined') s.className='slot dead';
     else if(p.holding) s.className='slot on';
     else s.className='slot joined';
   });
   for(let i=state.participants.length;i<5;i++){const s=document.getElementById('sl'+i);if(s)s.className='slot';}
-  if(state.phase==='active'&&state.holdingCount>=4&&Math.random()<.01){showMsg();}
+  if(state.phase==='active'&&state.holdingCount>=4&&Math.random()<.01)showMsg();
 });
 
 socket.on('flatline',()=>{
-  presence=0;
+  ME.pres=0;
   const m=document.getElementById('msg');
   m.classList.remove('on');
   setTimeout(()=>{m.textContent='the channel is closed.';m.classList.add('on');},200);
 });
 
 socket.on('reset',()=>location.reload());
-document.getElementById('resetBtn').addEventListener('click',()=>{
-  initAudio();
-  socket.emit('admin:reset');
-});
+document.getElementById('resetBtn').addEventListener('click',()=>{initAudio();socket.emit('admin:reset');});
 
 setInterval(showMsg,5000);
 function showMsg(){
-  if(presence<50)return;
+  if(ME.pres<50)return;
   mi=(mi+1)%MSGS.length;
   const m=document.getElementById('msg');
   m.classList.remove('on');
