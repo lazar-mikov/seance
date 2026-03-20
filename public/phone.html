@@ -23,7 +23,10 @@ canvas{width:180px;height:40px;display:block}
 .cw.active .ring.r2{animation:rp 1.8s ease-in-out infinite .6s}
 .circ{width:110px;height:110px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;transition:background .1s,border-color .1s;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;position:relative;z-index:2}
 .circ.held{background:#888;border-color:#888}
+.circ.listening{background:#888;border-color:#888}
 .circ.disabled{opacity:.3;cursor:default}
+.transcript{font-size:9px;letter-spacing:.1em;color:#252525;text-align:center;min-height:14px;padding:0 12px;font-style:italic;transition:color .4s}
+.transcript.active{color:#333}
 .dots{display:flex;gap:5px;justify-content:center}
 .dot{width:4px;height:4px;border-radius:50%;background:#0f0f0f;transition:background .3s,transform .4s;transform:scale(0)}
 .dot.joined{background:#181818;transform:scale(1)}
@@ -55,15 +58,19 @@ canvas{width:180px;height:40px;display:block}
       <div class="ring r1"></div>
       <div class="circ disabled" id="circ"></div>
     </div>
+    <div class="transcript" id="transcript"></div>
   </div>
   <div class="dots" id="dots"></div>
 </div>
 <script>
 const socket=io();
 let registered=false,held=false,flatlined=false;
+let recognition=null,recognizing=false;
 const circ=document.getElementById('circ');
 const cw=document.getElementById('cw');
 const dotsEl=document.getElementById('dots');
+const transcriptEl=document.getElementById('transcript');
+
 for(let i=0;i<5;i++){const d=document.createElement('div');d.className='dot';d.id='dot'+i;dotsEl.appendChild(d);}
 
 document.getElementById('joinBtn').addEventListener('click',join);
@@ -76,18 +83,83 @@ function join(){
 socket.on('registered',({name})=>{
   document.getElementById('join-screen').classList.add('hidden');
   document.getElementById('nameLabel').textContent=name.toUpperCase();
-  circ.className='circ';registered=true;
+  circ.className='circ';
+  registered=true;
+  initSpeech();
 });
 socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
 
+// Speech recognition
+function initSpeech(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return;
+  recognition=new SR();
+  recognition.continuous=false;
+  recognition.interimResults=true;
+  recognition.lang='en-US';
+
+  recognition.onstart=()=>{recognizing=true;};
+  recognition.onend=()=>{
+    recognizing=false;
+    if(held) restartRecognition();
+  };
+  recognition.onerror=(e)=>{
+    recognizing=false;
+    if(e.error==='no-speech'&&held) restartRecognition();
+  };
+  recognition.onresult=(e)=>{
+    let interim='',final='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal) final+=e.results[i][0].transcript;
+      else interim+=e.results[i][0].transcript;
+    }
+    const text=final||interim;
+    if(text){
+      transcriptEl.textContent=text;
+      transcriptEl.classList.add('active');
+    }
+    if(final&&final.trim().length>2){
+      socket.emit('question',{question:final.trim()});
+      setTimeout(()=>{
+        transcriptEl.textContent='';
+        transcriptEl.classList.remove('active');
+      },2000);
+    }
+  };
+}
+
+function startRecognition(){
+  if(!recognition||recognizing)return;
+  try{recognition.start();}catch(e){}
+}
+function stopRecognition(){
+  if(!recognition)return;
+  try{recognition.stop();}catch(e){}
+  recognizing=false;
+}
+function restartRecognition(){
+  setTimeout(()=>{if(held)startRecognition();},300);
+}
+
 function press(){
   if(!registered||circ.classList.contains('disabled'))return;
-  held=true;circ.className='circ held';cw.classList.add('active');socket.emit('hold');
+  held=true;
+  circ.className='circ held';
+  cw.classList.add('active');
+  socket.emit('hold');
+  startRecognition();
 }
 function release(){
   if(!registered||!held)return;
-  held=false;circ.className='circ';cw.classList.remove('active');socket.emit('release');
+  held=false;
+  circ.className='circ';
+  cw.classList.remove('active');
+  socket.emit('release');
+  stopRecognition();
+  transcriptEl.textContent='';
+  transcriptEl.classList.remove('active');
 }
+
 circ.addEventListener('mousedown',e=>{e.preventDefault();press()});
 circ.addEventListener('mouseup',release);
 circ.addEventListener('mouseleave',()=>{if(held)release()});
@@ -97,6 +169,7 @@ circ.addEventListener('touchcancel',()=>{if(held)release()});
 
 socket.on('state',state=>{
   flatlined=state.phase==='flatlined';
+  if(flatlined){stopRecognition();}
   state.participants.forEach((p,i)=>{
     const d=document.getElementById('dot'+i);if(!d)return;
     if(flatlined) d.className='dot dead';
@@ -105,27 +178,26 @@ socket.on('state',state=>{
   });
   for(let i=state.participants.length;i<5;i++){const d=document.getElementById('dot'+i);if(d)d.className='dot';}
 });
-socket.on('flatline',()=>{held=false;circ.className='circ';cw.classList.remove('active');});
+socket.on('flatline',()=>{held=false;circ.className='circ';cw.classList.remove('active');stopRecognition();});
 socket.on('reset',()=>location.reload());
 
+// EKG
 const canvas=document.getElementById('ekgCanvas');
 const ctx=canvas.getContext('2d');
 const W=180,H=40;
 const E={x:0,tr:[],nb:0,bpm:0,last:0};
 (function(){const r=window.devicePixelRatio||1;canvas.width=W*r;canvas.height=H*r;ctx.setTransform(r,0,0,r,0,0);})();
-
 function ecg(t){
   let y=0;
-  if(t>0.06&&t<0.14) y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
-  if(t>0.22&&t<0.27) y-=0.22*Math.sin((t-0.22)/0.05*Math.PI);
-  if(t>0.27&&t<0.37) y+=1.00*Math.sin((t-0.27)/0.10*Math.PI);
-  if(t>0.37&&t<0.42) y-=0.12*Math.sin((t-0.37)/0.05*Math.PI);
-  if(t>0.42&&t<0.50) y+=0.60*Math.sin((t-0.42)/0.08*Math.PI);
-  if(t>0.50&&t<0.56) y-=0.25*Math.sin((t-0.50)/0.06*Math.PI);
-  if(t>0.60&&t<0.80) y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
+  if(t>0.06&&t<0.14)y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
+  if(t>0.22&&t<0.27)y-=0.22*Math.sin((t-0.22)/0.05*Math.PI);
+  if(t>0.27&&t<0.37)y+=1.00*Math.sin((t-0.27)/0.10*Math.PI);
+  if(t>0.37&&t<0.42)y-=0.12*Math.sin((t-0.37)/0.05*Math.PI);
+  if(t>0.42&&t<0.50)y+=0.60*Math.sin((t-0.42)/0.08*Math.PI);
+  if(t>0.50&&t<0.56)y-=0.25*Math.sin((t-0.50)/0.06*Math.PI);
+  if(t>0.60&&t<0.80)y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
   return y;
 }
-
 function drawEkg(ts){
   const dt=Math.min(ts-E.last,50);E.last=ts;
   const bpmT=held?50:0;
@@ -135,11 +207,9 @@ function drawEkg(ts){
   if(E.x>W){E.x=0;E.tr=[];E.nb=0;}
   const my=H*.48;let y=my;
   if(E.bpm>4){
-    const bp=60000/E.bpm;
-    const beatPx=40*(bp/1000);
-    const loc=E.x-E.nb;
-    if(loc>=0&&loc<beatPx) y=my-ecg(loc/beatPx)*H*.50;
-    if(loc>=beatPx) E.nb=E.x;
+    const bp=60000/E.bpm,beatPx=40*(bp/1000),loc=E.x-E.nb;
+    if(loc>=0&&loc<beatPx)y=my-ecg(loc/beatPx)*H*.50;
+    if(loc>=beatPx)E.nb=E.x;
   }
   E.tr.push({x:E.x,y});
   if(E.tr.length>W*3)E.tr.shift();
@@ -150,8 +220,7 @@ function drawEkg(ts){
     ctx.beginPath();ctx.moveTo(E.tr[i-1].x,E.tr[i-1].y);ctx.lineTo(E.tr[i].x,E.tr[i].y);
     ctx.strokeStyle=`rgba(145,210,145,${al})`;ctx.lineWidth=.85;ctx.stroke();
   }
-  ctx.fillStyle='#030303';
-  ctx.fillRect(E.x+1,0,W*.12,H);
+  ctx.fillStyle='#030303';ctx.fillRect(E.x+1,0,W*.12,H);
   requestAnimationFrame(drawEkg);
 }
 requestAnimationFrame(drawEkg);

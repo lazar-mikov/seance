@@ -22,6 +22,12 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
 .slot.joined{background:#1c1c1c;transform:scale(1)}
 .slot.on{background:#2e2e2e;transform:scale(1)}
 .slot.dead{background:rgba(255,20,20,.3);transform:scale(1)}
+.question-display{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:25;text-align:center;pointer-events:none;display:flex;flex-direction:column;align-items:center;gap:20px}
+.q-text{font-size:13px;letter-spacing:.12em;color:transparent;transition:color 1s;font-style:italic;font-weight:300}
+.q-text.on{color:#252525}
+.q-answer{font-size:11px;letter-spacing:.4em;color:transparent;transition:color .5s;text-transform:uppercase}
+.q-answer.on{color:#2a2a2a}
+.flicker{position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:50;transition:opacity .05s}
 #resetBtn{position:fixed;bottom:20px;right:32px;font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:30;pointer-events:all;transition:color .2s,border-color .2s;text-transform:uppercase}
 #resetBtn:hover{color:#333;border-color:#333}
 </style>
@@ -35,7 +41,13 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
     <div class="slots" id="slots"></div>
   </div>
 </div>
+<div class="question-display">
+  <div class="q-text" id="qtext"></div>
+  <div class="q-answer" id="qanswer"></div>
+</div>
+<div class="flicker" id="flicker"></div>
 <button id="resetBtn">Reset</button>
+
 <script>
 const socket=io();
 socket.emit('register:screen');
@@ -44,7 +56,7 @@ const MSGS=['are you still here?','I know what you took.','tooth. under. pillow.
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
 let W,H,mi=0,phase='waiting';
-const ME={x:0,tr:[],nb:0,bpm:0,pres:0};
+const ME={x:0,tr:[],nb:0,bpm:0,pres:0,last:0};
 const slotsEl=document.getElementById('slots');
 for(let i=0;i<5;i++){const d=document.createElement('div');d.className='slot';d.id='sl'+i;slotsEl.appendChild(d);}
 
@@ -73,30 +85,26 @@ window.addEventListener('resize',resize);
 
 function ecg(t){
   let y=0;
-  if(t>0.06&&t<0.14) y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
-  if(t>0.22&&t<0.27) y-=0.22*Math.sin((t-0.22)/0.05*Math.PI);
-  if(t>0.27&&t<0.37) y+=1.00*Math.sin((t-0.27)/0.10*Math.PI);
-  if(t>0.37&&t<0.42) y-=0.12*Math.sin((t-0.37)/0.05*Math.PI);
-  if(t>0.42&&t<0.50) y+=0.60*Math.sin((t-0.42)/0.08*Math.PI);
-  if(t>0.50&&t<0.56) y-=0.25*Math.sin((t-0.50)/0.06*Math.PI);
-  if(t>0.60&&t<0.80) y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
+  if(t>0.06&&t<0.14)y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
+  if(t>0.22&&t<0.27)y-=0.22*Math.sin((t-0.22)/0.05*Math.PI);
+  if(t>0.27&&t<0.37)y+=1.00*Math.sin((t-0.27)/0.10*Math.PI);
+  if(t>0.37&&t<0.42)y-=0.12*Math.sin((t-0.37)/0.05*Math.PI);
+  if(t>0.42&&t<0.50)y+=0.60*Math.sin((t-0.42)/0.08*Math.PI);
+  if(t>0.50&&t<0.56)y-=0.25*Math.sin((t-0.50)/0.06*Math.PI);
+  if(t>0.60&&t<0.80)y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
   return y;
 }
 
-// Each person adds a noticeable step; first person is very faint/small
 function presToAmp(pres,maxAmp){
   const n=pres/100*5;
-  const norm=Math.pow(n/5,0.65);
-  return maxAmp*(0.04+norm*0.96);
+  return maxAmp*(0.04+Math.pow(n/5,0.65)*0.96);
 }
 function presToBright(pres){
-  const n=pres/100*5;
-  return 0.12+Math.pow(n/5,0.6)*0.72;
+  return 0.12+Math.pow(pres/100,0.6)*0.72;
 }
 
-let lastT=0;
 function draw(ts){
-  const dt=Math.min(ts-lastT,50);lastT=ts;
+  const dt=Math.min(ts-ME.last,50);ME.last=ts;
   const dead=phase==='flatlined';
   const spd=70*(dt/1000);
   ME.x+=spd;
@@ -105,11 +113,9 @@ function draw(ts){
   ME.bpm+=(bpmT-ME.bpm)*.04;
   const my=H*.5;let y=my;
   if(ME.bpm>4&&!dead){
-    const bp=60000/ME.bpm;
-    const beatPx=70*(bp/1000);
-    const loc=ME.x-ME.nb;
+    const bp=60000/ME.bpm,beatPx=70*(bp/1000),loc=ME.x-ME.nb;
     const amp=presToAmp(ME.pres,H*.30);
-    if(loc>=0&&loc<beatPx) y=my-ecg(loc/beatPx)*amp;
+    if(loc>=0&&loc<beatPx)y=my-ecg(loc/beatPx)*amp;
     if(loc>=beatPx){
       ME.nb=ME.x;
       const now=performance.now();
@@ -132,6 +138,48 @@ function draw(ts){
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
+
+// Question display
+socket.on('question',({name,question})=>{
+  const q=document.getElementById('qtext');
+  const a=document.getElementById('qanswer');
+  q.textContent=question;
+  q.classList.add('on');
+  a.textContent='';
+  a.classList.remove('on');
+});
+
+// Flicker — 1x for YES, 2x for NO
+socket.on('flicker',({answer,question})=>{
+  const q=document.getElementById('qtext');
+  const a=document.getElementById('qanswer');
+  q.textContent=question;
+  q.classList.add('on');
+  a.textContent=answer;
+  a.classList.add('on');
+
+  doFlicker(answer==='YES'?1:2,()=>{
+    setTimeout(()=>{
+      q.classList.remove('on');
+      a.classList.remove('on');
+    },4000);
+  });
+});
+
+function doFlicker(times,done){
+  const el=document.getElementById('flicker');
+  let count=0;
+  function flash(){
+    el.style.opacity='0.85';
+    setTimeout(()=>{
+      el.style.opacity='0';
+      count++;
+      if(count<times) setTimeout(flash,400);
+      else if(done) setTimeout(done,200);
+    },120);
+  }
+  flash();
+}
 
 socket.on('state',state=>{
   phase=state.phase;
