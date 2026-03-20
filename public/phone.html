@@ -23,7 +23,6 @@ canvas{width:180px;height:40px;display:block}
 .cw.active .ring.r2{animation:rp 1.8s ease-in-out infinite .6s}
 .circ{width:110px;height:110px;border-radius:50%;border:1px solid #2a2a2a;background:transparent;transition:background .1s,border-color .1s;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:none;position:relative;z-index:2}
 .circ.held{background:#888;border-color:#888}
-.circ.listening{background:#888;border-color:#888}
 .circ.disabled{opacity:.3;cursor:default}
 .transcript{font-size:9px;letter-spacing:.1em;color:#252525;text-align:center;min-height:14px;padding:0 12px;font-style:italic;transition:color .4s}
 .transcript.active{color:#333}
@@ -75,36 +74,50 @@ for(let i=0;i<5;i++){const d=document.createElement('div');d.className='dot';d.i
 
 document.getElementById('joinBtn').addEventListener('click',join);
 document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')join();});
+
 function join(){
   const name=document.getElementById('nameInput').value.trim();
   if(!name){document.getElementById('joinErr').textContent='Enter your name.';return;}
   socket.emit('register:phone',{name});
 }
+
 socket.on('registered',({name})=>{
   document.getElementById('join-screen').classList.add('hidden');
   document.getElementById('nameLabel').textContent=name.toUpperCase();
   circ.className='circ';
   registered=true;
+  console.log('Registered as:', name);
   initSpeech();
 });
+
 socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
 
-// Speech recognition
 function initSpeech(){
+  console.log('initSpeech called');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return;
+  console.log('SpeechRecognition available:', !!SR);
+  if(!SR){
+    console.log('Speech recognition NOT supported in this browser');
+    return;
+  }
   recognition=new SR();
   recognition.continuous=false;
   recognition.interimResults=true;
   recognition.lang='en-US';
+  console.log('Recognition object created');
 
-  recognition.onstart=()=>{recognizing=true;};
+  recognition.onstart=()=>{
+    recognizing=true;
+    console.log('Recognition started — listening');
+  };
   recognition.onend=()=>{
     recognizing=false;
+    console.log('Recognition ended. held:', held);
     if(held) restartRecognition();
   };
   recognition.onerror=(e)=>{
     recognizing=false;
+    console.log('Recognition error:', e.error, e.message);
     if(e.error==='no-speech'&&held) restartRecognition();
   };
   recognition.onresult=(e)=>{
@@ -114,11 +127,13 @@ function initSpeech(){
       else interim+=e.results[i][0].transcript;
     }
     const text=final||interim;
+    console.log('Speech result — interim:', interim, 'final:', final);
     if(text){
       transcriptEl.textContent=text;
       transcriptEl.classList.add('active');
     }
     if(final&&final.trim().length>2){
+      console.log('Submitting question:', final.trim());
       socket.emit('question',{question:final.trim()});
       setTimeout(()=>{
         transcriptEl.textContent='';
@@ -129,15 +144,25 @@ function initSpeech(){
 }
 
 function startRecognition(){
+  console.log('startRecognition called — recognition:', !!recognition, 'recognizing:', recognizing);
   if(!recognition||recognizing)return;
-  try{recognition.start();}catch(e){}
+  try{
+    recognition.start();
+    console.log('recognition.start() called successfully');
+  }catch(e){
+    console.log('recognition.start() error:', e.message);
+  }
 }
+
 function stopRecognition(){
+  console.log('stopRecognition called');
   if(!recognition)return;
   try{recognition.stop();}catch(e){}
   recognizing=false;
 }
+
 function restartRecognition(){
+  console.log('restartRecognition — restarting in 300ms');
   setTimeout(()=>{if(held)startRecognition();},300);
 }
 
@@ -147,8 +172,10 @@ function press(){
   circ.className='circ held';
   cw.classList.add('active');
   socket.emit('hold');
+  console.log('press() — starting recognition');
   startRecognition();
 }
+
 function release(){
   if(!registered||!held)return;
   held=false;
@@ -158,6 +185,7 @@ function release(){
   stopRecognition();
   transcriptEl.textContent='';
   transcriptEl.classList.remove('active');
+  console.log('release()');
 }
 
 circ.addEventListener('mousedown',e=>{e.preventDefault();press()});
@@ -169,7 +197,7 @@ circ.addEventListener('touchcancel',()=>{if(held)release()});
 
 socket.on('state',state=>{
   flatlined=state.phase==='flatlined';
-  if(flatlined){stopRecognition();}
+  if(flatlined) stopRecognition();
   state.participants.forEach((p,i)=>{
     const d=document.getElementById('dot'+i);if(!d)return;
     if(flatlined) d.className='dot dead';
@@ -178,15 +206,20 @@ socket.on('state',state=>{
   });
   for(let i=state.participants.length;i<5;i++){const d=document.getElementById('dot'+i);if(d)d.className='dot';}
 });
-socket.on('flatline',()=>{held=false;circ.className='circ';cw.classList.remove('active');stopRecognition();});
+
+socket.on('flatline',()=>{
+  held=false;circ.className='circ';cw.classList.remove('active');
+  stopRecognition();
+});
+
 socket.on('reset',()=>location.reload());
 
-// EKG
 const canvas=document.getElementById('ekgCanvas');
 const ctx=canvas.getContext('2d');
 const W=180,H=40;
 const E={x:0,tr:[],nb:0,bpm:0,last:0};
 (function(){const r=window.devicePixelRatio||1;canvas.width=W*r;canvas.height=H*r;ctx.setTransform(r,0,0,r,0,0);})();
+
 function ecg(t){
   let y=0;
   if(t>0.06&&t<0.14)y+=0.10*Math.sin((t-0.06)/0.08*Math.PI);
@@ -198,6 +231,7 @@ function ecg(t){
   if(t>0.60&&t<0.80)y+=0.22*Math.sin((t-0.60)/0.20*Math.PI);
   return y;
 }
+
 function drawEkg(ts){
   const dt=Math.min(ts-E.last,50);E.last=ts;
   const bpmT=held?50:0;
