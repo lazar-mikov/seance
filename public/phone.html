@@ -67,7 +67,7 @@ canvas{width:180px;height:40px;display:block}
 <script>
 const socket=io();
 let registered=false,held=false,flatlined=false;
-let recognition=null,recognizing=false,silenceTimer=null;
+let recognition=null,recognizing=false,silenceTimer=null,justSubmitted=false;
 const circ=document.getElementById('circ');
 const cw=document.getElementById('cw');
 const dotsEl=document.getElementById('dots');
@@ -84,16 +84,11 @@ document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='
 function join(){
   const name=document.getElementById('nameInput').value.trim();
   if(!name){document.getElementById('joinErr').textContent='Enter your name.';return;}
-
-  // Request mic permission during trusted button tap — required for Safari iOS
   if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
     navigator.mediaDevices.getUserMedia({audio:true})
-      .then(stream=>{
-        stream.getTracks().forEach(t=>t.stop());
-      })
-      .catch(e=>console.log('Mic permission denied:',e));
+      .then(stream=>{stream.getTracks().forEach(t=>t.stop());})
+      .catch(e=>console.log('Mic denied:',e));
   }
-
   socket.emit('register:phone',{name});
 }
 
@@ -109,6 +104,19 @@ socket.on('error',({message})=>{
   document.getElementById('joinErr').textContent=message;
 });
 
+function submitQuestion(q){
+  if(!q||q.trim().length<3) return;
+  // Clear immediately and block further submissions briefly
+  transcriptEl.textContent='';
+  transcriptEl.classList.remove('active');
+  justSubmitted=true;
+  socket.emit('question',{question:q.trim()});
+  // Stop recognition and restart fresh so transcript resets on Safari
+  try{recognition.stop();}catch(e){}
+  // Unblock after 2s so next question can come in
+  setTimeout(()=>{justSubmitted=false;},2000);
+}
+
 function initSpeech(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR) return;
@@ -119,9 +127,7 @@ function initSpeech(){
   recognition.lang='en-US';
   recognition.maxAlternatives=1;
 
-  recognition.onstart=()=>{
-    recognizing=true;
-  };
+  recognition.onstart=()=>{recognizing=true;};
 
   recognition.onend=()=>{
     recognizing=false;
@@ -147,11 +153,15 @@ function initSpeech(){
   };
 
   recognition.onresult=(e)=>{
+    // If we just submitted, ignore results until recognition restarts fresh
+    if(justSubmitted) return;
+
     let interim='',final='';
     for(let i=e.resultIndex;i<e.results.length;i++){
       if(e.results[i].isFinal) final+=e.results[i][0].transcript;
       else interim+=e.results[i][0].transcript;
     }
+
     const text=final||interim;
     if(text){
       transcriptEl.textContent=text;
@@ -159,29 +169,19 @@ function initSpeech(){
     }
 
     // Clear existing silence timer
-    if(silenceTimer) clearTimeout(silenceTimer);
+    if(silenceTimer){clearTimeout(silenceTimer);silenceTimer=null;}
 
-    // If final result (Chrome), submit immediately
+    // Chrome: isFinal fires — submit immediately
     if(final&&final.trim().length>2){
-      socket.emit('question',{question:final.trim()});
-      setTimeout(()=>{
-        transcriptEl.textContent='';
-        transcriptEl.classList.remove('active');
-      },2000);
+      submitQuestion(final.trim());
       return;
     }
 
-    // Safari never fires isFinal — use silence detection instead
+    // Safari: no isFinal — wait for 1.5s silence then submit
     if(interim&&interim.trim().length>2){
       silenceTimer=setTimeout(()=>{
         const q=transcriptEl.textContent.trim();
-        if(q.length>2){
-          socket.emit('question',{question:q});
-          setTimeout(()=>{
-            transcriptEl.textContent='';
-            transcriptEl.classList.remove('active');
-          },2000);
-        }
+        if(q.length>2&&!justSubmitted) submitQuestion(q);
       },1500);
     }
   };
@@ -249,7 +249,6 @@ socket.on('flatline',()=>{
 
 socket.on('reset',()=>location.reload());
 
-// EKG
 const canvas=document.getElementById('ekgCanvas');
 const ctx=canvas.getContext('2d');
 const W=180,H=40;
