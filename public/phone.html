@@ -78,6 +78,17 @@ document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='
 function join(){
   const name=document.getElementById('nameInput').value.trim();
   if(!name){document.getElementById('joinErr').textContent='Enter your name.';return;}
+
+  // Request mic permission now during trusted button tap — required for Safari iOS
+  if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+    navigator.mediaDevices.getUserMedia({audio:true})
+      .then(stream=>{
+        stream.getTracks().forEach(t=>t.stop());
+        console.log('Mic permission granted');
+      })
+      .catch(e=>console.log('Mic permission denied:',e));
+  }
+
   socket.emit('register:phone',{name});
 }
 
@@ -93,7 +104,7 @@ socket.on('error',({message})=>{document.getElementById('joinErr').textContent=m
 
 function initSpeech(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR) return;
+  if(!SR){console.log('Speech not supported');return;}
 
   recognition=new SR();
   recognition.continuous=true;
@@ -103,14 +114,16 @@ function initSpeech(){
 
   recognition.onstart=()=>{
     recognizing=true;
+    console.log('Listening...');
   };
 
   recognition.onend=()=>{
     recognizing=false;
+    console.log('Recognition ended, held:',held);
     if(held){
       setTimeout(()=>{
         if(held&&!recognizing){
-          try{recognition.start();}catch(e){}
+          try{recognition.start();}catch(e){console.log('restart err:',e.message);}
         }
       },100);
     }
@@ -118,11 +131,12 @@ function initSpeech(){
 
   recognition.onerror=(e)=>{
     recognizing=false;
+    console.log('Recognition error:',e.error);
     if(e.error==='not-allowed'||e.error==='service-not-allowed') return;
     if(held){
       setTimeout(()=>{
         if(held&&!recognizing){
-          try{recognition.start();}catch(e){}
+          try{recognition.start();}catch(e){console.log('restart err:',e.message);}
         }
       },300);
     }
@@ -135,11 +149,13 @@ function initSpeech(){
       else interim+=e.results[i][0].transcript;
     }
     const text=final||interim;
+    console.log('Heard:',text);
     if(text){
       transcriptEl.textContent=text;
       transcriptEl.classList.add('active');
     }
     if(final&&final.trim().length>2){
+      console.log('Submitting:',final.trim());
       socket.emit('question',{question:final.trim()});
       setTimeout(()=>{
         transcriptEl.textContent='';
@@ -151,7 +167,7 @@ function initSpeech(){
 
 function startRecognition(){
   if(!recognition||recognizing)return;
-  try{recognition.start();}catch(e){}
+  try{recognition.start();}catch(e){console.log('start err:',e.message);}
 }
 
 function stopRecognition(){
