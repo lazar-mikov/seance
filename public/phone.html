@@ -42,12 +42,14 @@ canvas{width:180px;height:40px;display:block}
 </style>
 </head>
 <body>
+
 <div id="join-screen">
   <div class="join-title">Haunted</div>
   <input class="join-input" id="nameInput" type="text" placeholder="your name" maxlength="20" autocomplete="off">
   <button class="join-btn" id="joinBtn">Enter the circle</button>
   <div class="join-err" id="joinErr"></div>
 </div>
+
 <div class="wrap">
   <div class="name" id="nameLabel"></div>
   <div class="mid">
@@ -61,16 +63,20 @@ canvas{width:180px;height:40px;display:block}
   </div>
   <div class="dots" id="dots"></div>
 </div>
+
 <script>
 const socket=io();
 let registered=false,held=false,flatlined=false;
-let recognition=null,recognizing=false;
+let recognition=null,recognizing=false,silenceTimer=null;
 const circ=document.getElementById('circ');
 const cw=document.getElementById('cw');
 const dotsEl=document.getElementById('dots');
 const transcriptEl=document.getElementById('transcript');
 
-for(let i=0;i<5;i++){const d=document.createElement('div');d.className='dot';d.id='dot'+i;dotsEl.appendChild(d);}
+for(let i=0;i<5;i++){
+  const d=document.createElement('div');d.className='dot';d.id='dot'+i;
+  dotsEl.appendChild(d);
+}
 
 document.getElementById('joinBtn').addEventListener('click',join);
 document.getElementById('nameInput').addEventListener('keydown',e=>{if(e.key==='Enter')join();});
@@ -79,12 +85,11 @@ function join(){
   const name=document.getElementById('nameInput').value.trim();
   if(!name){document.getElementById('joinErr').textContent='Enter your name.';return;}
 
-  // Request mic permission now during trusted button tap — required for Safari iOS
+  // Request mic permission during trusted button tap — required for Safari iOS
   if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
     navigator.mediaDevices.getUserMedia({audio:true})
       .then(stream=>{
         stream.getTracks().forEach(t=>t.stop());
-        console.log('Mic permission granted');
       })
       .catch(e=>console.log('Mic permission denied:',e));
   }
@@ -100,11 +105,13 @@ socket.on('registered',({name})=>{
   initSpeech();
 });
 
-socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
+socket.on('error',({message})=>{
+  document.getElementById('joinErr').textContent=message;
+});
 
 function initSpeech(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){console.log('Speech not supported');return;}
+  if(!SR) return;
 
   recognition=new SR();
   recognition.continuous=true;
@@ -114,16 +121,14 @@ function initSpeech(){
 
   recognition.onstart=()=>{
     recognizing=true;
-    console.log('Listening...');
   };
 
   recognition.onend=()=>{
     recognizing=false;
-    console.log('Recognition ended, held:',held);
     if(held){
       setTimeout(()=>{
         if(held&&!recognizing){
-          try{recognition.start();}catch(e){console.log('restart err:',e.message);}
+          try{recognition.start();}catch(e){}
         }
       },100);
     }
@@ -131,66 +136,71 @@ function initSpeech(){
 
   recognition.onerror=(e)=>{
     recognizing=false;
-    console.log('Recognition error:',e.error);
     if(e.error==='not-allowed'||e.error==='service-not-allowed') return;
     if(held){
       setTimeout(()=>{
         if(held&&!recognizing){
-          try{recognition.start();}catch(e){console.log('restart err:',e.message);}
+          try{recognition.start();}catch(e){}
         }
       },300);
     }
   };
 
- let silenceTimer=null;
+  recognition.onresult=(e)=>{
+    let interim='',final='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal) final+=e.results[i][0].transcript;
+      else interim+=e.results[i][0].transcript;
+    }
+    const text=final||interim;
+    if(text){
+      transcriptEl.textContent=text;
+      transcriptEl.classList.add('active');
+    }
 
-recognition.onresult=(e)=>{
-  let interim='',final='';
-  for(let i=e.resultIndex;i<e.results.length;i++){
-    if(e.results[i].isFinal) final+=e.results[i][0].transcript;
-    else interim+=e.results[i][0].transcript;
-  }
-  const text=final||interim;
-  if(text){
-    transcriptEl.textContent=text;
-    transcriptEl.classList.add('active');
-  }
+    // Clear existing silence timer
+    if(silenceTimer) clearTimeout(silenceTimer);
 
-  // Clear any existing silence timer
-  if(silenceTimer) clearTimeout(silenceTimer);
+    // If final result (Chrome), submit immediately
+    if(final&&final.trim().length>2){
+      socket.emit('question',{question:final.trim()});
+      setTimeout(()=>{
+        transcriptEl.textContent='';
+        transcriptEl.classList.remove('active');
+      },2000);
+      return;
+    }
 
-  // If we got a final result the normal way, submit immediately
-  if(final&&final.trim().length>2){
-    socket.emit('question',{question:final.trim()});
-    setTimeout(()=>{transcriptEl.textContent='';transcriptEl.classList.remove('active');},2000);
-    return;
-  }
-
-  // Otherwise wait for silence — if no new speech for 1.5s, submit what we have
-  if(interim&&interim.trim().length>2){
-    silenceTimer=setTimeout(()=>{
-      const q=transcriptEl.textContent.trim();
-      if(q.length>2){
-        socket.emit('question',{question:q});
-        setTimeout(()=>{transcriptEl.textContent='';transcriptEl.classList.remove('active');},2000);
-      }
-    },2500);
-  }
-};
+    // Safari never fires isFinal — use silence detection instead
+    if(interim&&interim.trim().length>2){
+      silenceTimer=setTimeout(()=>{
+        const q=transcriptEl.textContent.trim();
+        if(q.length>2){
+          socket.emit('question',{question:q});
+          setTimeout(()=>{
+            transcriptEl.textContent='';
+            transcriptEl.classList.remove('active');
+          },2000);
+        }
+      },1500);
+    }
+  };
+}
 
 function startRecognition(){
-  if(!recognition||recognizing)return;
-  try{recognition.start();}catch(e){console.log('start err:',e.message);}
+  if(!recognition||recognizing) return;
+  try{recognition.start();}catch(e){}
 }
 
 function stopRecognition(){
-  if(!recognition)return;
+  if(silenceTimer){clearTimeout(silenceTimer);silenceTimer=null;}
+  if(!recognition) return;
   try{recognition.stop();}catch(e){}
   recognizing=false;
 }
 
 function press(){
-  if(!registered||circ.classList.contains('disabled'))return;
+  if(!registered||circ.classList.contains('disabled')) return;
   held=true;
   circ.className='circ held';
   cw.classList.add('active');
@@ -199,7 +209,7 @@ function press(){
 }
 
 function release(){
-  if(!registered||!held)return;
+  if(!registered||!held) return;
   held=false;
   circ.className='circ';
   cw.classList.remove('active');
@@ -225,7 +235,9 @@ socket.on('state',state=>{
     else if(p.holding) d.className='dot on';
     else d.className='dot joined';
   });
-  for(let i=state.participants.length;i<5;i++){const d=document.getElementById('dot'+i);if(d)d.className='dot';}
+  for(let i=state.participants.length;i<5;i++){
+    const d=document.getElementById('dot'+i);if(d)d.className='dot';
+  }
 });
 
 socket.on('flatline',()=>{
@@ -237,11 +249,16 @@ socket.on('flatline',()=>{
 
 socket.on('reset',()=>location.reload());
 
+// EKG
 const canvas=document.getElementById('ekgCanvas');
 const ctx=canvas.getContext('2d');
 const W=180,H=40;
 const E={x:0,tr:[],nb:0,bpm:0,last:0};
-(function(){const r=window.devicePixelRatio||1;canvas.width=W*r;canvas.height=H*r;ctx.setTransform(r,0,0,r,0,0);})();
+(function(){
+  const r=window.devicePixelRatio||1;
+  canvas.width=W*r;canvas.height=H*r;
+  ctx.setTransform(r,0,0,r,0,0);
+})();
 
 function ecg(t){
   let y=0;
