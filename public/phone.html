@@ -142,28 +142,41 @@ function initSpeech(){
     }
   };
 
-  recognition.onresult=(e)=>{
-    let interim='',final='';
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      if(e.results[i].isFinal) final+=e.results[i][0].transcript;
-      else interim+=e.results[i][0].transcript;
-    }
-    const text=final||interim;
-    console.log('Heard:',text);
-    if(text){
-      transcriptEl.textContent=text;
-      transcriptEl.classList.add('active');
-    }
-    if(final&&final.trim().length>2){
-      console.log('Submitting:',final.trim());
-      socket.emit('question',{question:final.trim()});
-      setTimeout(()=>{
-        transcriptEl.textContent='';
-        transcriptEl.classList.remove('active');
-      },2000);
-    }
-  };
-}
+ let silenceTimer=null;
+
+recognition.onresult=(e)=>{
+  let interim='',final='';
+  for(let i=e.resultIndex;i<e.results.length;i++){
+    if(e.results[i].isFinal) final+=e.results[i][0].transcript;
+    else interim+=e.results[i][0].transcript;
+  }
+  const text=final||interim;
+  if(text){
+    transcriptEl.textContent=text;
+    transcriptEl.classList.add('active');
+  }
+
+  // Clear any existing silence timer
+  if(silenceTimer) clearTimeout(silenceTimer);
+
+  // If we got a final result the normal way, submit immediately
+  if(final&&final.trim().length>2){
+    socket.emit('question',{question:final.trim()});
+    setTimeout(()=>{transcriptEl.textContent='';transcriptEl.classList.remove('active');},2000);
+    return;
+  }
+
+  // Otherwise wait for silence — if no new speech for 1.5s, submit what we have
+  if(interim&&interim.trim().length>2){
+    silenceTimer=setTimeout(()=>{
+      const q=transcriptEl.textContent.trim();
+      if(q.length>2){
+        socket.emit('question',{question:q});
+        setTimeout(()=>{transcriptEl.textContent='';transcriptEl.classList.remove('active');},2000);
+      }
+    },2500);
+  }
+};
 
 function startRecognition(){
   if(!recognition||recognizing)return;
