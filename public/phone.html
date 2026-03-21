@@ -86,40 +86,48 @@ socket.on('registered',({name})=>{
   document.getElementById('nameLabel').textContent=name.toUpperCase();
   circ.className='circ';
   registered=true;
-  console.log('Registered as:', name);
   initSpeech();
 });
 
 socket.on('error',({message})=>{document.getElementById('joinErr').textContent=message;});
 
 function initSpeech(){
-  console.log('initSpeech called');
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  console.log('SpeechRecognition available:', !!SR);
-  if(!SR){
-    console.log('Speech recognition NOT supported in this browser');
-    return;
-  }
+  if(!SR) return;
+
   recognition=new SR();
-  recognition.continuous=false;
+  recognition.continuous=true;
   recognition.interimResults=true;
   recognition.lang='en-US';
-  console.log('Recognition object created');
+  recognition.maxAlternatives=1;
 
   recognition.onstart=()=>{
     recognizing=true;
-    console.log('Recognition started — listening');
   };
+
   recognition.onend=()=>{
     recognizing=false;
-    console.log('Recognition ended. held:', held);
-    if(held) restartRecognition();
+    if(held){
+      setTimeout(()=>{
+        if(held&&!recognizing){
+          try{recognition.start();}catch(e){}
+        }
+      },100);
+    }
   };
+
   recognition.onerror=(e)=>{
     recognizing=false;
-    console.log('Recognition error:', e.error, e.message);
-    if(e.error==='no-speech'&&held) restartRecognition();
+    if(e.error==='not-allowed'||e.error==='service-not-allowed') return;
+    if(held){
+      setTimeout(()=>{
+        if(held&&!recognizing){
+          try{recognition.start();}catch(e){}
+        }
+      },300);
+    }
   };
+
   recognition.onresult=(e)=>{
     let interim='',final='';
     for(let i=e.resultIndex;i<e.results.length;i++){
@@ -127,13 +135,11 @@ function initSpeech(){
       else interim+=e.results[i][0].transcript;
     }
     const text=final||interim;
-    console.log('Speech result — interim:', interim, 'final:', final);
     if(text){
       transcriptEl.textContent=text;
       transcriptEl.classList.add('active');
     }
     if(final&&final.trim().length>2){
-      console.log('Submitting question:', final.trim());
       socket.emit('question',{question:final.trim()});
       setTimeout(()=>{
         transcriptEl.textContent='';
@@ -144,26 +150,14 @@ function initSpeech(){
 }
 
 function startRecognition(){
-  console.log('startRecognition called — recognition:', !!recognition, 'recognizing:', recognizing);
   if(!recognition||recognizing)return;
-  try{
-    recognition.start();
-    console.log('recognition.start() called successfully');
-  }catch(e){
-    console.log('recognition.start() error:', e.message);
-  }
+  try{recognition.start();}catch(e){}
 }
 
 function stopRecognition(){
-  console.log('stopRecognition called');
   if(!recognition)return;
   try{recognition.stop();}catch(e){}
   recognizing=false;
-}
-
-function restartRecognition(){
-  console.log('restartRecognition — restarting in 300ms');
-  setTimeout(()=>{if(held)startRecognition();},300);
 }
 
 function press(){
@@ -172,7 +166,6 @@ function press(){
   circ.className='circ held';
   cw.classList.add('active');
   socket.emit('hold');
-  console.log('press() — starting recognition');
   startRecognition();
 }
 
@@ -185,7 +178,6 @@ function release(){
   stopRecognition();
   transcriptEl.textContent='';
   transcriptEl.classList.remove('active');
-  console.log('release()');
 }
 
 circ.addEventListener('mousedown',e=>{e.preventDefault();press()});
@@ -208,7 +200,9 @@ socket.on('state',state=>{
 });
 
 socket.on('flatline',()=>{
-  held=false;circ.className='circ';cw.classList.remove('active');
+  held=false;
+  circ.className='circ';
+  cw.classList.remove('active');
   stopRecognition();
 });
 
