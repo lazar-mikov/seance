@@ -80,6 +80,19 @@ You are not at peace but you are trying to reach through.`
     console.log(`Ghost answers: ${answer}`);
     io.emit('flicker', { answer, question, name: participantName });
 
+    // Trigger Alexa lights
+try {
+  const effect = answer === 'YES' ? 'ghost-yes' : 'ghost-no';
+  await fetch('https://haunted-production.up.railway.app/api/trigger', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ effect })
+  });
+  console.log(`Light trigger sent: ${effect}`);
+} catch (err) {
+  console.error('Light trigger failed:', err.message);
+}
+
   } catch (err) {
     console.error('OpenAI error:', err.message);
   } finally {
