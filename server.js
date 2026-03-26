@@ -83,7 +83,7 @@ You are not at peace but you are trying to reach through.`
     // Trigger Alexa lights
 try {
   const effect = answer === 'YES' ? 'ghost-yes' : 'ghost-no';
-  await fetch('https://haunted-production.up.railway.app/api/trigger', {
+  await fetch('https://haunted-production.up.railway.app/api/trigger-direct', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ effect })
