@@ -105,15 +105,18 @@ socket.on('error',({message})=>{
 });
 
 function submitQuestion(q){
-  if(!q||q.trim().length<3) return;
-  // Clear immediately and block further submissions briefly
+ // Only process if question contains the trigger word
+  const trigger='mara';
+  if(!q.toLowerCase().includes(trigger)) return;
+  // Strip the trigger word before sending
+  const clean=q.toLowerCase().replace(trigger,'').trim();
+  if(!clean||clean.length<3) return;
+  
   transcriptEl.textContent='';
   transcriptEl.classList.remove('active');
   justSubmitted=true;
-  socket.emit('question',{question:q.trim()});
-  // Stop recognition and restart fresh so transcript resets on Safari
+  socket.emit('question',{question:clean});
   try{recognition.stop();}catch(e){}
-  // Unblock after 2s so next question can come in
   setTimeout(()=>{justSubmitted=false;},2000);
 }
 
