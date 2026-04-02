@@ -12,7 +12,7 @@ html,body{height:100%;background:#030303;font-family:'IBM Plex Mono',monospace;o
 body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 3px,rgba(0,0,0,.05) 3px,rgba(0,0,0,.05) 4px);pointer-events:none;z-index:10}
 body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.75));pointer-events:none;z-index:11}
 canvas{position:fixed;inset:0;width:100%;height:100%}
-#staticCanvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:15;opacity:0;transition:opacity .3s}
+#staticCanvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:15;opacity:0}
 #hospital{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;z-index:12;filter:grayscale(1) contrast(1.1) brightness(0.7);pointer-events:none}
 .ui{position:fixed;inset:0;z-index:20;display:flex;flex-direction:column;justify-content:space-between;padding:32px 48px;pointer-events:none}
 .title{font-size:10px;letter-spacing:.35em;color:#181818;text-transform:uppercase}
@@ -29,15 +29,39 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
 .q-text.on{color:#252525}
 .q-answer{font-size:11px;letter-spacing:.4em;color:transparent;transition:color .5s;text-transform:uppercase}
 .q-answer.on{color:#2a2a2a}
-.flicker{position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:50;}
+.flicker{position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:50}
 #resetBtn{position:fixed;bottom:20px;right:32px;font-family:'IBM Plex Mono',monospace;font-size:7px;letter-spacing:.2em;color:#111;background:transparent;border:.5px solid #111;padding:5px 14px;border-radius:20px;cursor:pointer;z-index:60;transition:color .2s,border-color .2s;text-transform:uppercase}
 #resetBtn:hover{color:#333;border-color:#333}
+
+/* Summoning screen */
+#summoning{position:fixed;inset:0;background:#030303;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;transition:opacity 1.5s}
+#summoning.hidden{opacity:0;pointer-events:none}
+.rhyme-lines{display:flex;flex-direction:column;align-items:center;gap:28px;margin-bottom:48px}
+.rhyme-line{font-size:clamp(14px,2.2vw,22px);font-weight:300;letter-spacing:.18em;text-align:center;color:#444;transition:color 1.2s ease;white-space:nowrap}
+.rhyme-line.done{color:#cc0000}
+.summon-status{font-size:9px;letter-spacing:.3em;color:#1e1e1e;text-transform:uppercase;text-align:center;transition:color .5s;min-height:14px}
+.summon-status.active{color:#2a0000}
+.summon-status.complete{color:#8b0000}
+#beginBtn{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.25em;color:#1e1e1e;background:transparent;border:.5px solid #1e1e1e;padding:8px 20px;border-radius:20px;cursor:pointer;margin-top:28px;transition:color .2s,border-color .2s;text-transform:uppercase}
+#beginBtn:hover{color:#444;border-color:#444}
+.open-msg{font-size:10px;letter-spacing:.35em;color:transparent;text-transform:uppercase;text-align:center;margin-top:32px;transition:color 2s}
+.open-msg.on{color:#8b0000}
 </style>
 </head>
 <body>
+
+<!-- SUMMONING SCREEN -->
+<div id="summoning">
+  <div class="rhyme-lines" id="rhymeLines"></div>
+  <div class="summon-status" id="summonStatus">Press begin — then read aloud</div>
+  <button id="beginBtn">Begin</button>
+  <div class="open-msg" id="openMsg">The channel is open.</div>
+</div>
+
 <canvas id="c"></canvas>
 <video id="hospital" src="/hospital.mp4" loop muted playsinline preload="auto"></video>
 <canvas id="staticCanvas"></canvas>
+
 <div class="ui">
   <div class="title">Haunted</div>
   <div class="bottom">
@@ -45,17 +69,117 @@ canvas{position:fixed;inset:0;width:100%;height:100%}
     <div class="slots" id="slots"></div>
   </div>
 </div>
+
 <div class="question-display">
   <div class="q-text" id="qtext"></div>
   <div class="q-answer" id="qanswer"></div>
 </div>
+
 <div class="flicker" id="flicker"></div>
 <button id="resetBtn">Reset</button>
 
 <script>
 const socket=io();
-socket.emit('register:screen');
 
+// ---- SUMMONING ----
+const RHYME=[
+  {text:'Mara, Mara, hold the line',        keys:['mara','hold','line']},
+  {text:'feed from this heart of mine',      keys:['heart','mine']},
+  {text:'our hands holding make you whole',  keys:['hands','whole']},
+  {text:'break the circle, lose our souls.', keys:['break','circle','soul']},
+];
+
+const rhymeLinesEl=document.getElementById('rhymeLines');
+const summonStatus=document.getElementById('summonStatus');
+const beginBtn=document.getElementById('beginBtn');
+const openMsg=document.getElementById('openMsg');
+const summoningEl=document.getElementById('summoning');
+
+const rhymeEls=RHYME.map(({text})=>{
+  const div=document.createElement('div');
+  div.className='rhyme-line';
+  div.textContent=text;
+  rhymeLinesEl.appendChild(div);
+  return div;
+});
+
+let summonRecognition=null,summonStarted=false;
+const lineHeard=Array(4).fill(false);
+
+function matchRhymeLine(transcript,i){
+  const t=transcript.toLowerCase();
+  const keys=RHYME[i].keys;
+  const matched=keys.filter(k=>t.includes(k)).length;
+  return matched>=Math.ceil(keys.length*0.6);
+}
+
+function allHeard(){return lineHeard.every(Boolean);}
+
+function initSummonSpeech(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){summonStatus.textContent='Speech not supported';return;}
+  summonRecognition=new SR();
+  summonRecognition.continuous=true;
+  summonRecognition.interimResults=true;
+  summonRecognition.lang='en-US';
+
+  summonRecognition.onresult=(e)=>{
+    let text='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      text+=e.results[i][0].transcript;
+    }
+    RHYME.forEach((_,i)=>{
+      if(!lineHeard[i]&&matchRhymeLine(text,i)){
+        lineHeard[i]=true;
+        rhymeEls[i].classList.add('done');
+      }
+    });
+    if(allHeard()){
+      summonRecognition.stop();
+      summonStatus.textContent='';
+      summonStatus.className='summon-status complete';
+      openMsg.classList.add('on');
+      // Open séance after short pause
+      setTimeout(()=>{
+        summoningEl.classList.add('hidden');
+        socket.emit('register:screen');
+        initAudio();
+      },2500);
+    }
+  };
+
+  summonRecognition.onend=()=>{
+    if(summonStarted&&!allHeard()){
+      setTimeout(()=>{try{summonRecognition.start();}catch(e){}},200);
+    }
+  };
+
+  summonRecognition.onerror=(e)=>{
+    if(e.error==='not-allowed') summonStatus.textContent='Microphone access denied.';
+    else if(summonStarted&&!allHeard()){
+      setTimeout(()=>{try{summonRecognition.start();}catch(e){}},300);
+    }
+  };
+}
+
+beginBtn.addEventListener('click',()=>{
+  if(summonStarted)return;
+  summonStarted=true;
+  beginBtn.style.display='none';
+  summonStatus.textContent='Listening...';
+  summonStatus.className='summon-status active';
+  // Request mic permission
+  if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+    navigator.mediaDevices.getUserMedia({audio:true})
+      .then(stream=>{stream.getTracks().forEach(t=>t.stop());initSummonSpeech();try{summonRecognition.start();}catch(e){}})
+      .catch(()=>{summonStatus.textContent='Microphone access denied.';});
+  } else {
+    initSummonSpeech();
+    try{summonRecognition.start();}catch(e){}
+  }
+});
+
+// ---- MAIN SCREEN ----
 const MSGS=['are you still here?','I know what you took.','tooth. under. pillow.','she never forgave you.','let go. let go. let go.'];
 const canvas=document.getElementById('c');
 const ctx=canvas.getContext('2d');
@@ -84,8 +208,6 @@ function playBeat(vol){
   g2.gain.setValueAtTime(0,now+0.1);g2.gain.linearRampToValueAtTime(vol*0.35,now+0.105);g2.gain.exponentialRampToValueAtTime(0.001,now+0.2);
   o2.start(now+0.1);o2.stop(now+0.2);
 }
-document.addEventListener('click',initAudio,{once:true});
-document.addEventListener('keydown',initAudio,{once:true});
 
 function resize(){
   W=canvas.width=window.innerWidth;
@@ -116,7 +238,6 @@ function presToBright(pres){
   return 0.12+Math.pow(pres/100,0.6)*0.72;
 }
 
-// Static noise renderer
 function drawStatic(amount){
   if(amount<=0){sctx.clearRect(0,0,W,H);staticCanvas.style.opacity='0';return;}
   staticCanvas.style.opacity='1';
@@ -129,7 +250,6 @@ function drawStatic(amount){
     }
   }
   sctx.putImageData(imageData,0,0);
-  // Glitch lines
   if(Math.random()<amount*0.5){
     const ly=Math.random()*H;
     sctx.fillStyle=`rgba(0,${Math.floor(Math.random()*120+40)},0,${amount*0.5})`;
@@ -137,22 +257,17 @@ function drawStatic(amount){
   }
 }
 
-let lastDraw=0;
 function draw(ts){
   const dt=Math.min(ts-ME.last,50);ME.last=ts;
   const dead=phase==='flatlined';
-
-  // Video / static handling
   if(dead&&flatlineTime!==null){
     const elapsed=(ts-flatlineTime)/1000;
-    // Static heavy for first 1.5s, then video bleeds in over 4s
     const staticAmt=Math.max(0,0.95-elapsed*0.18);
     const videoAlpha=Math.min(1,Math.max(0,(elapsed-1.0)/4));
     video.style.opacity=videoAlpha;
     drawStatic(staticAmt);
     if(videoAlpha>0&&video.paused) video.play();
   }
-
   const spd=70*(dt/1000);
   ME.x+=spd;
   if(ME.x>W){ME.x=0;ME.tr=[];ME.nb=0;}
@@ -172,9 +287,7 @@ function draw(ts){
   ME.tr.push({x:ME.x,y});
   if(ME.tr.length>W*3)ME.tr.shift();
   ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#030303';
-  ctx.fillRect(0,0,W,H);
-
+  ctx.fillStyle='#030303';ctx.fillRect(0,0,W,H);
   const bright=dead?0.06:presToBright(ME.pres);
   for(let i=1;i<ME.tr.length;i++){
     const age=(ME.tr.length-i)/ME.tr.length;
@@ -183,9 +296,7 @@ function draw(ts){
     ctx.strokeStyle=dead?`rgba(120,4,4,${al})`:`rgba(155,225,155,${al})`;
     ctx.lineWidth=1.8;ctx.lineJoin='round';ctx.stroke();
   }
-  ctx.fillStyle='#030303';
-  ctx.fillRect(ME.x+1,0,W*.07,H);
-
+  ctx.fillStyle='#030303';ctx.fillRect(ME.x+1,0,W*.07,H);
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
@@ -193,24 +304,17 @@ requestAnimationFrame(draw);
 socket.on('question',({name,question})=>{
   const q=document.getElementById('qtext');
   const a=document.getElementById('qanswer');
-  q.textContent=question;
-  q.classList.add('on');
-  a.textContent='...';
-  a.classList.add('on');
+  q.textContent=question;q.classList.add('on');
+  a.textContent='...';a.classList.add('on');
 });
 
 socket.on('flicker',({answer,question})=>{
   const q=document.getElementById('qtext');
   const a=document.getElementById('qanswer');
-  q.textContent=question;
-  q.classList.add('on');
-  a.textContent=answer;
-  a.classList.add('on');
+  q.textContent=question;q.classList.add('on');
+  a.textContent=answer;a.classList.add('on');
   doFlicker(answer==='YES'?1:2,()=>{
-    setTimeout(()=>{
-      q.classList.remove('on');
-      a.classList.remove('on');
-    },4000);
+    setTimeout(()=>{q.classList.remove('on');a.classList.remove('on');},4000);
   });
 });
 
@@ -218,11 +322,9 @@ function doFlicker(times,done){
   const el=document.getElementById('flicker');
   let count=0;
   function flash(){
-    el.style.transition='none';
-    el.style.opacity='0.9';
+    el.style.transition='none';el.style.opacity='0.9';
     setTimeout(()=>{
-      el.style.transition='opacity 0.4s ease';
-      el.style.opacity='0';
+      el.style.transition='opacity 0.4s ease';el.style.opacity='0';
       count++;
       if(count<times) setTimeout(flash,700);
       else if(done) setTimeout(done,500);
@@ -245,19 +347,15 @@ socket.on('state',state=>{
 });
 
 socket.on('flatline',()=>{
-  ME.pres=0;
-  flatlineTime=performance.now();
+  ME.pres=0;flatlineTime=performance.now();
   const m=document.getElementById('msg');
   m.classList.remove('on');
   setTimeout(()=>{m.textContent='the channel is closed.';m.classList.add('on');},200);
 });
 
 socket.on('reset',()=>{
-  video.pause();
-  video.currentTime=0;
-  video.style.opacity='0';
-  staticCanvas.style.opacity='0';
-  flatlineTime=null;
+  video.pause();video.currentTime=0;video.style.opacity='0';
+  staticCanvas.style.opacity='0';flatlineTime=null;
   location.reload();
 });
 
